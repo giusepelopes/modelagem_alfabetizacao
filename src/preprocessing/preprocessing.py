@@ -9,6 +9,8 @@ BASE_DATA = Path(__file__).resolve().parent.parent.parent / "data"
 # buscando caracterizar melhor municípios e UFs brasileiras.
 def constroi_df_resultante(df, df_estatisticas_escolares, df_dados_socioeconomicos):
 
+  df_dados_socioeconomicos.loc[df_dados_socioeconomicos['gini_uf'] > 1, 'gini_uf'] /= 1000
+
   df_estatisticas_escolares = df_estatisticas_escolares \
   .filter(items=["ano", "id_escola", "total_alunos", "percentual_faltantes", "desvio_padrao_proficiencia"]) \
   .rename(columns={
@@ -103,7 +105,7 @@ def run_preprocessing(df_ml_aluno, df_estatisticas_escolares, df_dados_socioecon
 def preprocess(filter = True):
     df_ml_aluno = pd.read_parquet(f'{BASE_DATA}/ml_aluno', engine='pyarrow')
     df_estatisticas_escolares = pd.read_parquet(f'{BASE_DATA}/estatisticas_escolares', engine='pyarrow')
-    df_dados_socioeconomicos = pd.read_csv(f"{BASE_DATA}/br_dados_socioeconomicos.csv", delimiter=";")
+    df_dados_socioeconomicos = pd.read_csv(f"{BASE_DATA}/br_dados_socioeconomicos.csv", delimiter=';')
 
     df_resultante = run_preprocessing(df_ml_aluno, df_estatisticas_escolares, df_dados_socioeconomicos, filter)
     
