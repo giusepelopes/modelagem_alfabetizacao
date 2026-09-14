@@ -12,9 +12,10 @@ def constroi_df_resultante(df, df_estatisticas_escolares, df_dados_socioeconomic
   df_dados_socioeconomicos.loc[df_dados_socioeconomicos['gini_uf'] > 1, 'gini_uf'] /= 1000
 
   df_estatisticas_escolares = df_estatisticas_escolares \
-  .filter(items=["ano", "id_escola", "total_alunos", "percentual_faltantes", "desvio_padrao_proficiencia"]) \
+  .filter(items=["ano", "id_escola", "total_alunos", "total_alunos_presentes", "percentual_faltantes", "desvio_padrao_proficiencia"]) \
   .rename(columns={
       "total_alunos": "total_participantes_escola",
+      "total_alunos_presentes": "total_presentes_escola",
       "percentual_faltantes": "percentual_faltantes_escola",
       "desvio_padrao_proficiencia": "desvio_padrao_proficiencia_escola"})
 
@@ -26,6 +27,9 @@ def constroi_df_resultante(df, df_estatisticas_escolares, df_dados_socioeconomic
   df_dados_socioeconomicos['nome_municipio'] = df_dados_socioeconomicos['nome_municipio'].replace('´', "'", regex=True)
 
   df = df.merge(df_dados_socioeconomicos, on=["nome_municipio", "sigla_uf", "ano"], how="left")
+
+  df['feat_rate_escola_mun'] = df['feat_media_proficiencia_escola'] / df['feat_media_portugues_municipio']
+  df['feat_rate_mun_estado'] = df['feat_media_portugues_municipio'] / df['feat_media_portugues_estado']
 
   return df.drop(columns=["_gold_processed_at"])
 
@@ -90,15 +94,17 @@ def run_preprocessing(df_ml_aluno, df_estatisticas_escolares, df_dados_socioecon
   df_resultante = constroi_df_resultante(df_ml_aluno, df_estatisticas_escolares, df_dados_socioeconomicos)
 
   if filter:
-    df_resultante = df_resultante.filter(items=['ano', 'feat_rede_encoded', 'feat_peso_aluno', 'feat_media_proficiencia_escola', 'desvio_padrao_proficiencia_escola', \
-                                            'total_participantes_escola', 'percentual_faltantes_escola', 'feat_media_portugues_municipio', \
+    df_resultante = df_resultante.filter(items=['ano', 'sigla_uf', 'feat_rede_encoded', 'feat_peso_aluno', 'feat_media_proficiencia_escola', 'desvio_padrao_proficiencia_escola', \
+                                            'feat_rate_escola_mun', 'total_participantes_escola', 'total_presentes_escola', 'percentual_faltantes_escola', 'feat_media_portugues_municipio', 'feat_rate_mun_estado', \
                                             'feat_media_portugues_estado', 'proporcao_pbf_municipio', 'ideb_medio_municipio', \
                                             'tendencia_ideb_municipio', 'gini_uf', 'target_alfabetizado']) \
   
   df_resultante = df_resultante.rename(columns={'desvio_padrao_proficiencia_escola': 'feat_std_proficiencia_escola', 'total_participantes_escola': 'feat_total_participantes_escola', \
-    'percentual_faltantes_escola': 'feat_percentual_faltantes_escola', 'proporcao_pbf_municipio': 'feat_proporcao_pbf_municipio', \
+    'total_presentes_escola': 'feat_total_presentes_escola','percentual_faltantes_escola': 'feat_percentual_faltantes_escola', 'proporcao_pbf_municipio': 'feat_proporcao_pbf_municipio', \
       'ideb_medio_municipio': 'feat_ideb_medio_municipio', 'tendencia_ideb_municipio': 'feat_tendencia_ideb_municipio', \
-        'gini_uf': 'feat_gini_uf'})
+        'gini_uf': 'feat_gini_uf', 'sigla_uf': 'feat_uf'})
+
+  df_resultante['feat_coef_variacao_escola'] = df_resultante['feat_std_proficiencia_escola'] / df_resultante['feat_media_proficiencia_escola']
 
   return df_resultante
 
