@@ -8,7 +8,7 @@ BASE_DATA = Path(__file__).resolve().parent.parent.parent / "data"
 # Método para incrementar a tabela resultante da camada gold 'ml_aluno' com dados socioeconomicos,
 # buscando caracterizar melhor municípios e UFs brasileiras.
 def constroi_df_resultante(df, df_estatisticas_escolares, df_dados_socioeconomicos):
-
+  print(f"[INFO:PREPROC] Integrando dados da camada Gold com indicadores socioeconômicos.")
   df_dados_socioeconomicos.loc[df_dados_socioeconomicos['gini_uf'] > 1, 'gini_uf'] /= 1000
 
   df_estatisticas_escolares = df_estatisticas_escolares \
@@ -53,6 +53,7 @@ def constroi_df_resultante(df, df_estatisticas_escolares, df_dados_socioeconomic
 """
 
 def imputa_faltantes(df):
+  print(f"[INFO:PREPROC] Imputando valores faltantes.")
   # Descartando não encontrados.
   df = df[df['sigla_uf'] != "Não encontrado"]
 
@@ -88,7 +89,7 @@ def imputa_faltantes(df):
   return df
 
 def run_preprocessing(df_ml_aluno, df_estatisticas_escolares, df_dados_socioeconomicos, filter):
-
+  
   df_ml_aluno = imputa_faltantes(df_ml_aluno)
 
   df_resultante = constroi_df_resultante(df_ml_aluno, df_estatisticas_escolares, df_dados_socioeconomicos)
@@ -109,10 +110,15 @@ def run_preprocessing(df_ml_aluno, df_estatisticas_escolares, df_dados_socioecon
   return df_resultante
 
 def preprocess(filter = True):
-    df_ml_aluno = pd.read_parquet(f'{BASE_DATA}/ml_aluno', engine='pyarrow')
-    df_estatisticas_escolares = pd.read_parquet(f'{BASE_DATA}/estatisticas_escolares', engine='pyarrow')
-    df_dados_socioeconomicos = pd.read_csv(f"{BASE_DATA}/br_dados_socioeconomicos.csv", delimiter=';')
-
+    print(f"[INFO:PREPROC] Iniciando leitura dos dados de entrada.")
+    try:
+      df_ml_aluno = pd.read_parquet(f'{BASE_DATA}/ml_aluno', engine='pyarrow')
+      df_estatisticas_escolares = pd.read_parquet(f'{BASE_DATA}/estatisticas_escolares', engine='pyarrow')
+      df_dados_socioeconomicos = pd.read_csv(f"{BASE_DATA}/br_dados_socioeconomicos.csv", delimiter=';')
+    except Exception as e:
+      print(f"[ERROR:PREPROC] Erro na leitura dos dados de entrada: {str(e)}")
+      raise e
+    print(f"[INFO:PREPROC] Leitura dos dados completa. Prosseguindo com pré-processamento.")
     df_resultante = run_preprocessing(df_ml_aluno, df_estatisticas_escolares, df_dados_socioeconomicos, filter)
-    
+    print(f"[INFO:PREPROC] Pré-processamento concluído.\n")
     return df_resultante

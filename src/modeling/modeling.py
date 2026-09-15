@@ -13,45 +13,46 @@ from src.preprocessing import preprocessing
 # Desabilitar logs do Optuna para manter o terminal limpo durante os testes
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# Obtendo o dataframe resultante a partir do preprocessamento.
-data = preprocessing.preprocess()
+# Responsável por executar o preprocessamento e retornar os dados do split train -> validation -> test
+def get_modeling_data():
+    # Obtendo o dataframe resultante a partir do preprocessamento.
+    data = preprocessing.preprocess()
+    
+    print("[INFO:MODEL] Executando a divisão de dados train -> validation -> test.")
+    
+    drop_cols = ['ano', 'target_alfabetizado', 'feat_peso_aluno']
 
-drop_cols = ['ano', 'target_alfabetizado', 'feat_peso_aluno']
+    # Separação dos dados de treino e teste feita considerando ano de avaliação,
+    # Visando evitar vazamento de dados. Volumetria de dados próxima entre os dois anos.
+    data_2023 = data[data['ano'] == 2023].copy()
+    data_2024 = data[data['ano'] == 2024].copy()
 
-# Separação dos dados de treino e teste feita considerando ano de avaliação,
-# Visando evitar vazamento de dados. Volumetria de dados próxima entre os dois anos.
-data_2023 = data[data['ano'] == 2023].copy()
-data_2024 = data[data['ano'] == 2024].copy()
+    X_dev = data_2023.drop(columns=drop_cols)
+    y_dev = data_2023['target_alfabetizado']
 
-X_dev = data_2023.drop(columns=drop_cols)
-y_dev = data_2023['target_alfabetizado']
+    X_test = data_2024.drop(columns=drop_cols)
+    y_test = data_2024['target_alfabetizado']
 
-X_test = data_2024.drop(columns=drop_cols)
-y_test = data_2024['target_alfabetizado']
+    # Split dos dados de treino para (80% treino / 20% validação interna).
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_dev, y_dev, 
+        test_size=0.20, 
+        random_state=42, 
+        stratify=y_dev
+    )
 
-# Split dos dados de treino para (80% treino / 20% validação interna).
-X_train, X_val, y_train, y_val = train_test_split(
-    X_dev, y_dev, 
-    test_size=0.20, 
-    random_state=42, 
-    stratify=y_dev
-)
+    # Conversão das variáveis categóricas para uso na modelagem.
+    for col in ['feat_uf', 'feat_rede_encoded']:
+        if col in X_train.columns:
+            X_train[col] = X_train[col].astype('category')
+            X_val[col] = X_val[col].astype('category')
+            X_test[col] = X_test[col].astype('category')
+    
+    return X_train, X_val, X_test, y_train, y_val, y_test 
 
-# Conversão das variáveis categóricas para uso na modelagem.
-X_train['feat_uf'] = X_train['feat_uf'].astype('category')
-X_val['feat_uf'] = X_val['feat_uf'].astype('category')
-X_test['feat_uf'] = X_test['feat_uf'].astype('category')
-
-X_train['feat_rede_encoded'] = X_train['feat_rede_encoded'].astype('category')
-X_val['feat_rede_encoded'] = X_val['feat_rede_encoded'].astype('category')
-X_test['feat_rede_encoded'] = X_test['feat_rede_encoded'].astype('category')
-
-# Configuração dos datasets de treino e validação a serem usados para o LightGBM.
-dtrain = lgb.Dataset(X_train, label=y_train)
-dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
-
-# Função Objetivo para o Optuna
-def objective(trial):
+# Função objetivo para o Optuna, implementada visando otimização para F0.5 Score,
+# visto que vamos priorizar precisão como métrica, para minimização de falsos positivos.
+def objective(trial, dtrain, dval, X_val, y_val):
     
     params = {
         'objective': 'binary',
@@ -60,13 +61,13 @@ def objective(trial):
         'verbosity': -1,
         'random_state': 42,
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-        'num_leaves': trial.suggest_int('num_leaves', 15, 130),
+        'num_leaves': trial.suggest_int('num_leaves', 10, 80),
         'max_depth': trial.suggest_int('max_depth', 3, 10),
         'min_child_samples': trial.suggest_int('min_child_samples', 10, 100),
         'subsample': trial.suggest_float('subsample', 0.5, 1.0),
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
-        'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
-        'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+        'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10.0, log=True),
+        'reg_lambda': trial.suggest_float('reg_lambda', 1e-3, 10.0, log=True),
         'feature_pre_filter': False
     }
 
@@ -76,73 +77,68 @@ def objective(trial):
         dtrain,
         num_boost_round=1000,
         valid_sets=[dval],
-        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)]
     )
 
-    # Probabilidades na validação interna
+    # Predição com os valores do conjunto de validação
     preds_val_prob = model.predict(X_val, num_iteration=model.best_iteration)
-    auc = roc_auc_score(y_val, preds_val_prob)
-    return auc
 
-# Execução da Otimização
-study = optuna.create_study(direction='maximize')
-study.optimize(objective, n_trials=50, show_progress_bar=True)
+    # Busca do melhor limiar focado em F0.5-Score
+    thresholds = np.linspace(0.50, 0.80, 30)
+    best_f05 = 0.0
+    for t in thresholds:
+        preds_binary = (preds_val_prob >= t).astype(int)
+        score = fbeta_score(y_val, preds_binary, beta=0.5, zero_division=0)
+        if score > best_f05:
+            best_f05 = score
 
-# Treinamento guiado apenas pelos dados de validação interna (2023).
-model = lgb.train(
-    study.best_params,
-    dtrain,
-    num_boost_round=1000,
-    valid_sets=[dval],
-    callbacks=[lgb.early_stopping(50, verbose=False)],
-)
+    return best_f05
 
-preds_validation = model.predict(X_val, num_iteration=model.best_iteration)
+# Função responsável por executar o método estudo do Optuna, para otimizar hiperparâmetros.
+def optimize_hp(dtrain, dval, X_val, y_val):
+    print(f'[INFO:MODEL] Iniciando otimização de hiperparâmetros.')
 
-limiares = np.linspace(0.40, 0.75, 500)
-melhor_limiar = 0.5
-melhor_f05 = 0.0
+    # Execução da otimização com 30 tentativas
+    study = optuna.create_study(direction='maximize')
+    study.optimize(lambda trial: objective(trial, dtrain, dval, X_val, y_val), n_trials=30, show_progress_bar=True)
 
-for l in limiares:
-    preds_binary = (preds_validation >= l).astype(int)
-    # beta=0.42 penaliza mais os Falsos Positivos do que os Falsos Negativos
-    score = fbeta_score(y_val, preds_binary, beta=0.42)
+    print(f'[INFO:MODEL] Otimização de hyperparâmetros completa.')
+    
+    return study
 
-    if score > melhor_f05:
-        melhor_f05 = score
-        melhor_limiar = l
+def train_model():
+    
+    X_train, X_val, X_test, y_train, y_val, y_test = get_modeling_data()
 
-print('=== OTIMIZAÇÃO DE LIMIAR ===')
-print(f'Limiar Padrão: 0.50')
-print(f'Limiar Ótimo Encontrado: {melhor_limiar:.4f}')
-print(f'Melhor F0.5-Score na Validação: {melhor_f05:.4f}\n')
+    # Configuração dos datasets de treino e validação a serem usados para o LightGBM.
+    dtrain = lgb.Dataset(X_train, label=y_train)
+    dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
 
-preds_test_prob = model.predict(X_test, num_iteration=model.best_iteration)
+    study = optimize_hp(dtrain, dval, X_val, y_val)
 
-# Comparativo Padrão vs. Ajustado
-preds_test_default = (preds_test_prob >= 0.50).astype(int)
-preds_test_adjusted = (preds_test_prob >= melhor_limiar).astype(int)
+    print(f'[INFO:MODEL] Prosseguindo com treinamento do modelo utilizando hiperparâmetros ótimos encontrados.')
+    # Re-treinamento utilizando os parametros ótimos encontrados pelo optuna.
+    best_params = study.best_params
+    best_params.update({'objective': 'binary', 'metric': 'binary_logloss', 'verbose': -1})
 
-print('=== COMPARATIVO NO TESTE DE 2024 ===')
-print(f'Precisão (Limiar 0.50): {precision_score(y_test, preds_test_default):.4f}')
-print(f'Precisão (Limiar {melhor_limiar:.2f}): {precision_score(y_test, preds_test_adjusted):.4f}\n')
+    best_model = lgb.train(
+        best_params,
+        dtrain,
+        num_boost_round=1000,
+        valid_sets=[dval],
+        callbacks=[lgb.early_stopping(50, verbose=False)]
+    )
 
-cm = confusion_matrix(y_test, preds_test_default)
-vn, fp, fn, vp = cm.ravel()
-print('Matriz de Confusão em 2024 (Limiar padrão):')
-print(f'Verdadeiros Negativos (Não-Alfabetizados Corretos): {vn:,}')
-print(f'Falsos Positivos (ERRO GRAVE: Previsto Alfabetizado, mas Não É): {fp:,}')
-print(f'Falsos Negativos (Previsto Não-Alfabetizado, mas É): {fn:,}')
-print(f'Verdadeiros Positivos (Alfabetizados Corretos): {vp:,}')
+    # Encontrar o limiar definitivo na validação de 2023
+    preds_val_prob = best_model.predict(X_val, num_iteration=best_model.best_iteration)
 
-# Matriz de Confusão com Limiar Ajustado
-cm = confusion_matrix(y_test, preds_test_adjusted)
-vn, fp, fn, vp = cm.ravel()
-print('Matriz de Confusão em 2024 (Limiar Ajustado):')
-print(f'Verdadeiros Negativos (Não-Alfabetizados Corretos): {vn:,}')
-print(f'Falsos Positivos (ERRO GRAVE: Previsto Alfabetizado, mas Não É): {fp:,}')
-print(f'Falsos Negativos (Previsto Não-Alfabetizado, mas É): {fn:,}')
-print(f'Verdadeiros Positivos (Alfabetizados Corretos): {vp:,}')
+    best_threshold = 0.5
+    max_f05 = 0.0
+    for threshold in np.linspace(0.50, 0.80, 50):
+        score = fbeta_score(y_val, (preds_val_prob >= threshold).astype(int), beta=0.5, zero_division=0)
+        if score > max_f05:
+            max_f05 = score
+            best_threshold = threshold
 
-auc_2024 = roc_auc_score(y_test, preds_test_prob)
-print(f'ROC-AUC Padrão em 2024: {auc_2024:.4f}')
+    print(f'[INFO:MODEL] Treinamento concluído.\n')
+    return best_model, best_threshold, X_test, y_test
