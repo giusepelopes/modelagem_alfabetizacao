@@ -4,7 +4,7 @@ import pandas as pd
 import lightgbm as lgb
 import numpy as np
 import optuna
-from sklearn.metrics import classification_report, confusion_matrix, fbeta_score, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import fbeta_score
 from sklearn.model_selection import train_test_split
 
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))

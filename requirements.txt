@@ -1,0 +1,11 @@
+fastparquet==2026.5.0
+lightgbm==4.7.0
+matplotlib==3.10.8
+numpy==2.4.4
+optuna==5.0.0
+pandas==3.0.2
+pyarrow==25.0.1
+scikit-learn==1.9.0
+scipy==1.17.1
+seaborn==0.13.2
+shap==0.52.0
